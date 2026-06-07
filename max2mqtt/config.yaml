@@ -1,0 +1,51 @@
+name: "MAX! CUL Bridge"
+version: "1.0.0"
+slug: max2mqtt
+description: "Bridges ELV MAX! thermostats via CUL/CUN stick to MQTT"
+url: "https://github.com/jc-23/ha-addons"
+arch:
+  - amd64
+startup: services
+boot: auto
+init: false
+uart: true
+services:
+  - mqtt:need
+map:
+  - config:ro
+options:
+  serial_port: /dev/ttyACM0
+  serial_baud: 38400
+  mqtt_host: core-mosquitto
+  mqtt_port: 1883
+  mqtt_user: fhem
+  mqtt_password: ""
+  base_topic: SmartHome
+  profiles_file: /config/heating_week_profile.yaml
+  cul_address: "abcdef"
+  devices:
+    - room: LivingRoom
+      address: aabb01
+    - room: Bathroom
+      address: aabb02
+    - room: Bedroom
+      address: aabb03
+  weekprofile_frame_gap: 3.5
+  lovf_recovery_gap: 10.0
+  time_sync_interval_hours: 24
+schema:
+  serial_port: str
+  serial_baud: int
+  mqtt_host: str
+  mqtt_port: int
+  mqtt_user: str
+  mqtt_password: str
+  base_topic: str
+  profiles_file: str
+  cul_address: str
+  devices:
+    - room: str
+      address: str
+  weekprofile_frame_gap: float
+  lovf_recovery_gap: float
+  time_sync_interval_hours: int
