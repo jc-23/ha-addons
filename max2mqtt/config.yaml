@@ -1,5 +1,5 @@
 name: "MAX! CUL Bridge"
-version: "1.0.0"
+version: "1.0.1"
 slug: max2mqtt
 description: "Bridges ELV MAX! thermostats via CUL/CUN stick to MQTT"
 url: "https://github.com/jc-23/ha-addons"

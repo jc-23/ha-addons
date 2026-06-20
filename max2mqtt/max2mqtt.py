@@ -432,20 +432,22 @@ def mqtt_publish(topic: str, payload: str, retain: bool = False) -> None:
 
 
 def publish_thermostat_state(room: str, state: dict) -> None:
+    # Retain state so Home Assistant restores the last known values after a
+    # restart, instead of showing an empty entity until the next RF report.
     prefix = f"{BASE_TOPIC}/climate/{room}"
     if state.get("actual_temp") is not None:
-        mqtt_publish(f"{prefix}/current_temperature", str(state["actual_temp"]))
+        mqtt_publish(f"{prefix}/current_temperature", str(state["actual_temp"]), retain=True)
     if state.get("desired_temp") is not None:
-        mqtt_publish(f"{prefix}/target_temperature", str(state["desired_temp"]))
+        mqtt_publish(f"{prefix}/target_temperature", str(state["desired_temp"]), retain=True)
         # Remember the real setpoint for boost preservation, but skip boost echoes
         # (mode "heat") so we don't capture the transient boost value.
         if state.get("mode") != "heat":
             _last_desired[room] = state["desired_temp"]
     if state.get("valve") is not None:
-        mqtt_publish(f"{prefix}/valve",              str(state["valve"]))
-    mqtt_publish(f"{prefix}/mode",         state.get("mode", "auto"))
-    mqtt_publish(f"{prefix}/battery",      "1" if state.get("battery_low") else "0")
-    mqtt_publish(f"{prefix}/availability", "online")
+        mqtt_publish(f"{prefix}/valve",              str(state["valve"]), retain=True)
+    mqtt_publish(f"{prefix}/mode",         state.get("mode", "auto"), retain=True)
+    mqtt_publish(f"{prefix}/battery",      "1" if state.get("battery_low") else "0", retain=True)
+    mqtt_publish(f"{prefix}/availability", "online", retain=True)
 
 
 def on_connect(client, userdata, flags, rc):
@@ -543,8 +545,8 @@ def _handle_set_temperature(room: str, payload: str) -> None:
     # state echo can take a minute or more to arrive over RF.
     hvac_mode  = "heat" if mode == 3 else ("off" if (mode == 1 and temp <= 17.0) else "auto")
     prefix     = f"{BASE_TOPIC}/climate/{room}"
-    mqtt_publish(f"{prefix}/target_temperature", str(temp))
-    mqtt_publish(f"{prefix}/mode", hvac_mode)
+    mqtt_publish(f"{prefix}/target_temperature", str(temp), retain=True)
+    mqtt_publish(f"{prefix}/mode", hvac_mode, retain=True)
 
 
 # Duty-cycle aware sending.

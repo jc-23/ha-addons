@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+- Publish thermostat state (current/target temperature, valve, mode, battery,
+  availability) as **retained** so Home Assistant restores the last known values
+  after a restart instead of showing an empty entity until the next RF report.
+
 ## 1.0.0
 
 - Initial release as a store add-on.
