@@ -494,7 +494,7 @@ def on_message(client, userdata, msg):
 def _handle_set_temperature(room: str, payload: str) -> None:
     """
     Payload from HA can be:
-      - "auto"           → mode=auto, temp=17.0
+      - "auto"           → mode=auto, keeps the current setpoint
       - "off"  / "eco"   → mode=manual, temp=17.0 (off equivalent)
       - "heat" / "boost" → mode=boost, keeps the current setpoint
       - "auto <temp>"    → mode=auto, explicit temp
@@ -509,7 +509,13 @@ def _handle_set_temperature(room: str, payload: str) -> None:
     temp     = 17.0
 
     if payload == "auto":
-        mode = 0; temp = 17.0
+        # A SetTemperature frame always carries a temp byte, even in auto mode — and
+        # the thermostat holds that value until its *next week-profile switch point*
+        # (same "temporary override" behaviour as turning the physical dial). Sending
+        # a fixed 17.0 here used to drop the room to the Eco/off temperature for
+        # potentially hours; re-send the last known real setpoint instead so a plain
+        # "auto" (e.g. after clearing a manual/boost override) doesn't move the target.
+        mode = 0; temp = _last_desired.get(room, 21.0)
     elif payload in ("off", "eco"):
         mode = 1; temp = 17.0
     elif payload in ("heat", "boost"):

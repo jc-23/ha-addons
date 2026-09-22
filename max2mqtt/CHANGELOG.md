@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2
+
+- Fixed: switching a thermostat back to `auto` (e.g. after a manual/boost override)
+  no longer forces the setpoint down to 17 °C until the next week-profile switch
+  point. `SetTemperature` in auto mode always holds its temp byte until the
+  thermostat's next scheduled switch point — the same way turning the physical
+  dial does — so a bare `"auto"` command now re-sends the last known real setpoint
+  instead of a hardcoded 17.0.
+
 ## 1.0.1
 
 - Publish thermostat state (current/target temperature, valve, mode, battery,
