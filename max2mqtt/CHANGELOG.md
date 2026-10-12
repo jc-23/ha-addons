@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3
+
+- Fixed: the MapleCUL stick dropped off the USB bus (and the config/time frame was
+  lost) whenever two preamble sends (`Zs`) were queued back to back. This hit
+  every config push (WakeUp followed 0.5 s later by the config frame) and the
+  periodic time broadcast (1 s between rooms). Consecutive sends are now spaced
+  by `TX_SETTLE` (2 s), so the stick stays connected and config frames are acked.
+- The time broadcast now aborts when the CUL is unavailable instead of writing
+  the remaining frames to a closed port.
+
 ## 1.0.2
 
 - Fixed: switching a thermostat back to `auto` (e.g. after a manual/boost override)

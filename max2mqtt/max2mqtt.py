@@ -569,6 +569,11 @@ def _handle_set_temperature(room: str, payload: str) -> None:
 LOVF_DETECT_WINDOW = 0.6   # seconds to catch a LOVF reply after a send
 ACK_TIMEOUT        = 2.0   # seconds to wait for the thermostat's ack
 MAX_FRAME_RETRIES  = 8     # per frame before giving up
+# Minimum gap between two consecutive preamble sends (Zs). A Zs blocks the stick
+# for ~1 s (preamble) + frame; queuing a second one right behind it makes the
+# MapleCUL drop off the USB bus ~2.06 s after the first write. Observed with
+# WakeUp+config (0.5 s gap) and with the time broadcast (1 s gap); stable at 2 s.
+TX_SETTLE          = 2.0
 # Kept for add-on config compatibility (no longer used directly):
 WEEKPROFILE_FRAME_GAP = float(_opts.get("weekprofile_frame_gap", 3.5))
 LOVF_RECOVERY_GAP     = float(_opts.get("lovf_recovery_gap", 10.0))
@@ -587,7 +592,7 @@ def _wake(room: str) -> None:
     frame = build_frame(MSG_WAKEUP, BASE_ADDR, ADDR_BY_ROOM[room], b"\x3f")
     if cul_send(frame):
         log.info("WakeUp → %s", room)
-        time.sleep(0.5)
+        time.sleep(TX_SETTLE)  # let the WakeUp preamble finish before the next Zs
 
 
 def _frame_credit_cost(frame_hex: str) -> int:
@@ -847,9 +852,11 @@ def time_broadcast_loop() -> None:
             for room in ADDR_BY_ROOM:
                 frame = build_frame(MSG_TIME_INFORMATION, BASE_ADDR, ADDR_BY_ROOM[room],
                                     encode_time_information(), flags=0x04)
-                if cul_send(frame):
-                    log.info("TimeInformation broadcast → %s", room)
-                time.sleep(1)  # small spacing to respect the duty cycle
+                if not cul_send(frame):
+                    log.warning("TimeInformation broadcast aborted at %s (CUL unavailable)", room)
+                    break
+                log.info("TimeInformation broadcast → %s", room)
+                time.sleep(TX_SETTLE)  # also keeps back-to-back Zs from resetting the stick
         time.sleep(interval)
 
 
