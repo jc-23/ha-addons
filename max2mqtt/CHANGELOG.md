@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.6
+
+- Fixed: the Supervisor timezone lookup was rejected with HTTP 403. The add-on now
+  requests `hassio_api` (read-only use: `/supervisor/info`), so the timezone is
+  taken from Home Assistant without setting the `timezone` option.
+
 ## 1.0.5
 
 - Fixed: thermostat clocks (and with them the week profile switch points) ran in

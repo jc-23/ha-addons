@@ -1,5 +1,5 @@
 name: "MAX! CUL Bridge"
-version: "1.0.5"
+version: "1.0.6"
 slug: max2mqtt
 description: "Bridges ELV MAX! thermostats via CUL/CUN stick to MQTT"
 url: "https://github.com/jc-23/ha-addons"
@@ -9,6 +9,7 @@ startup: services
 boot: auto
 init: false
 uart: true
+hassio_api: true  # read the HA timezone from /supervisor/info
 services:
   - mqtt:need
 map:
