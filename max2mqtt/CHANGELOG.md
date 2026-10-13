@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.7
+
+- Setpoint, mode and boost commands now go through the same serialised, paced and
+  ack-checked send path as config pushes (previously fire-and-forget and able to
+  collide with other transmissions or trigger the stick disconnect).
+- Rapid commands are debounced and coalesced (newest wins): setpoint 1 s, config 2 s;
+  several config changes of one group go out as a single frame.
+- Failed deliveries are retried after 10/30/60 s (also across a stick reconnect),
+  unless superseded by a newer command.
+- New retained status topics `<base_topic>/climate/<room>/<setting>/status`
+  (`pending` / `ok` / `failed`), see README.
+- All preamble sends are spaced at least `TX_SETTLE` apart, regardless of origin.
+
 ## 1.0.6
 
 - Fixed: the Supervisor timezone lookup was rejected with HTTP 403. The add-on now

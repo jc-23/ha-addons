@@ -95,6 +95,20 @@ suitable for HA `number` entities:
 > = boost duration + valve), changing one re-sends the whole group — so review the whole
 > group when first configuring a device.
 
+### Delivery status
+
+Every command (`target_temperature`/`mode` and each config setting) publishes a
+retained delivery status at `<base_topic>/climate/<room>/<setting>/status`
+(for the setpoint: `.../target_temperature/status`):
+
+- `pending` — accepted, waiting out the debounce / transmission
+- `ok` — the thermostat acknowledged the frame
+- `failed` — not delivered after retries (stick unplugged, thermostat out of range)
+
+Rapid changes are coalesced (setpoint 1 s, config 2 s; the newest value wins), and a
+failed delivery is retried after 10 s, 30 s and 60 s unless a newer command replaced it.
+All transmissions share one lock and are spaced at least 2 s apart.
+
 ### Time synchronisation
 
 The add-on answers the thermostats' `TimeInformation` requests and broadcasts the time

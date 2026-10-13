@@ -532,6 +532,18 @@ def on_message(client, userdata, msg):
         return
 
 
+def _push_setpoint(room: str, mode: int, temp: float, resume_profile: bool, is_current) -> None:
+    frame = build_frame(MSG_SET_TEMPERATURE, BASE_ADDR, ADDR_BY_ROOM[room],
+                        encode_set_temperature(temp, mode))
+    log.info("SetTemperature → %s: mode=%d temp=%.1f%s", room, mode, temp,
+             " (resume week profile)" if resume_profile else "")
+    result, _ = _deliver(room, lambda: (frame, None), f"settemp {room}", is_current)
+    if result != "superseded":
+        _publish_status(room, "target_temperature", "ok" if result == "ok" else "failed")
+        if result != "ok":
+            log.warning("SetTemperature for %s was not delivered", room)
+
+
 def _handle_set_temperature(room: str, payload: str) -> None:
     """
     Payload from HA can be:
@@ -579,11 +591,10 @@ def _handle_set_temperature(room: str, payload: str) -> None:
             log.warning("Cannot parse temperature payload: %s", payload)
             return
 
-    enc     = encode_set_temperature(temp, mode)
-    frame   = build_frame(MSG_SET_TEMPERATURE, BASE_ADDR, ADDR_BY_ROOM[room], enc)
-    cul_send(frame)
-    log.info("SetTemperature → %s: mode=%d temp=%.1f%s", room, mode, temp,
-             " (resume week profile)" if resume_profile else "")
+    # Latest command per room wins; sent paced, serialised and ack-checked.
+    _publish_status(room, "target_temperature", "pending")
+    _schedule(("setpoint", room), DEBOUNCE_SETPOINT, _push_setpoint,
+              room, mode, temp, resume_profile)
 
     # Seed the boost-preservation cache from explicit setpoints (not from boost
     # itself, nor from the 17.0 off/auto placeholders).
@@ -634,14 +645,85 @@ _tx_lock = threading.Lock()
 def _wake(room: str) -> None:
     """Best-effort WakeUp (0xF1) so the thermostat is awake for the following frame(s)."""
     frame = build_frame(MSG_WAKEUP, BASE_ADDR, ADDR_BY_ROOM[room], b"\x3f")
-    if cul_send(frame):
+    if _paced_send(frame):
         log.info("WakeUp → %s", room)
-        time.sleep(TX_SETTLE)  # let the WakeUp preamble finish before the next Zs
 
 
 def _frame_credit_cost(frame_hex: str) -> int:
     """credit10ms cost of a preamble send; with ~1 unit/s regen this also equals the seconds to wait."""
     return math.ceil(100 + len(frame_hex) * 4 / 10)
+
+
+_last_tx = 0.0  # monotonic time of the last preamble send (only touched under _tx_lock)
+
+
+def _paced_send(frame: str) -> bool:
+    """cul_send, but never closer than TX_SETTLE to the previous preamble send."""
+    global _last_tx
+    wait = _last_tx + TX_SETTLE - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    ok = cul_send(frame)
+    _last_tx = time.monotonic()
+    return ok
+
+
+# Debounce / coalesce rapid commands (HA sliders, repeated clicks): only the newest
+# command per key is sent, after a short quiet period.
+DEBOUNCE_SETPOINT = 1.0   # seconds
+DEBOUNCE_CONFIG   = 2.0   # seconds
+RETRY_DELAYS      = (10, 30, 60)  # pauses before re-trying a failed delivery
+
+_sched_gen: dict = {}
+_sched_lock = threading.Lock()
+
+
+def _schedule(key, delay: float, fn, *args) -> None:
+    """Run fn(*args, is_current) in a thread after `delay`; a newer _schedule(key) supersedes it."""
+    with _sched_lock:
+        gen = _sched_gen.get(key, 0) + 1
+        _sched_gen[key] = gen
+
+    def is_current() -> bool:
+        with _sched_lock:
+            return _sched_gen.get(key) == gen
+
+    def run() -> None:
+        time.sleep(delay)
+        if is_current():
+            fn(*args, is_current)
+
+    threading.Thread(target=run, daemon=True, name=f"tx-{key}").start()
+
+
+def _deliver(room: str, build, label: str, is_current, wake: bool = False,
+             frame_retries: int = 2):
+    """
+    Send a frame (rebuilt via build() -> (frame, token) on every attempt), waiting for
+    the ack, and retry after RETRY_DELAYS if it was not delivered (e.g. stick reconnect).
+    Returns (result, token): result is "ok", "failed", or "superseded" (a newer
+    command replaced this one while retrying).
+    """
+    token = None
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        if attempt:
+            log.info("%s not delivered, retry %d/%d in %ds", label, attempt,
+                     len(RETRY_DELAYS), RETRY_DELAYS[attempt - 1])
+            time.sleep(RETRY_DELAYS[attempt - 1])
+        if not is_current():
+            return "superseded", token
+        frame, token = build()
+        with _tx_lock:
+            if wake:
+                _wake(room)
+            if _send_frame(room, frame, label, frame_retries) == "ok":
+                return "ok", token
+    return "failed", token
+
+
+def _publish_status(room: str, setting: str, status: str) -> None:
+    """Delivery status of a command: pending → ok | failed (retained)."""
+    mqtt_publish(f"{BASE_TOPIC}/climate/{room}/{setting}/status", status, retain=True)
 
 
 def _handle_set_week_profile(profile_name: str) -> None:
@@ -652,7 +734,7 @@ def _handle_set_week_profile(profile_name: str) -> None:
     ).start()
 
 
-def _send_frame(room: str, frame: str, label: str) -> str:
+def _send_frame(room: str, frame: str, label: str, retries: int = MAX_FRAME_RETRIES) -> str:
     """
     Send one frame to a thermostat (with preamble) and wait for its ack.
 
@@ -665,10 +747,10 @@ def _send_frame(room: str, frame: str, label: str) -> str:
     ack  = _ack_events[ADDR_BY_ROOM[room]]
     cost = _frame_credit_cost(frame)
 
-    for attempt in range(MAX_FRAME_RETRIES + 1):
+    for attempt in range(retries + 1):
         ack.clear()
         _lovf_event.clear()
-        if not cul_send(frame):
+        if not _paced_send(frame):
             return "serial_error"
         log.info("TX %s%s", label, "" if attempt == 0 else f" retry {attempt}")
 
@@ -753,8 +835,12 @@ def _coerce_config(setting: str, raw: str):
     return int(num) if setting in _INT_CONFIG_SETTINGS else float(num)
 
 
+_pending_config: dict = {}  # (room, group) -> settings changed but not yet acked
+_pending_config_lock = threading.Lock()
+
+
 def _handle_set_config(room: str, setting: str, payload: str) -> None:
-    """Validate a config setting, persist it, echo retained state, push frame in background."""
+    """Validate a config setting, persist it, echo retained state, push (debounced) in background."""
     value = _coerce_config(setting, payload.strip())
     if value is None:
         log.warning("Cannot parse config %s for %s: %r", setting, room, payload)
@@ -762,29 +848,39 @@ def _handle_set_config(room: str, setting: str, payload: str) -> None:
     _config[room][setting] = value
     _save_config()
     mqtt_publish(f"{BASE_TOPIC}/climate/{room}/{setting}", str(value), retain=True)
-    threading.Thread(
-        target=_push_config, args=(room, setting), daemon=True,
-        name=f"config-{room}-{setting}",
-    ).start()
+    group = "valve" if setting in CONFIG_VALVE_SETTINGS else "temp"
+    with _pending_config_lock:
+        _pending_config.setdefault((room, group), set()).add(setting)
+    _publish_status(room, setting, "pending")
+    # The frame carries the whole group, so several quick changes go out as one.
+    _schedule(("config", room, group), DEBOUNCE_CONFIG, _push_config, room, group)
 
 
-def _push_config(room: str, setting: str) -> None:
+def _push_config(room: str, group: str, is_current) -> None:
     """WakeUp + send the full ConfigTemperatures or ConfigValve frame for a room."""
-    cfg = _config[room]
-    if setting in CONFIG_VALVE_SETTINGS:
-        frame = build_frame(MSG_CONFIG_VALVE, BASE_ADDR, ADDR_BY_ROOM[room], encode_config_valve(cfg))
-        label = f"configvalve {room}"
-    else:
-        frame = build_frame(MSG_CONFIG_TEMPERATURES, BASE_ADDR, ADDR_BY_ROOM[room],
-                            encode_config_temperatures(cfg))
-        label = f"configtemp {room}"
-    with _tx_lock:
-        _wake(room)
-        result = _send_frame(room, frame, label)
+    def build():
+        cfg = dict(_config[room])
+        with _pending_config_lock:
+            snapshot = set(_pending_config.get((room, group), ()))
+        if group == "valve":
+            frame = build_frame(MSG_CONFIG_VALVE, BASE_ADDR, ADDR_BY_ROOM[room], encode_config_valve(cfg))
+        else:
+            frame = build_frame(MSG_CONFIG_TEMPERATURES, BASE_ADDR, ADDR_BY_ROOM[room],
+                                encode_config_temperatures(cfg))
+        return frame, snapshot
+
+    label = f"config{'valve' if group == 'valve' else 'temp'} {room}"
+    result, snapshot = _deliver(room, build, label, is_current, wake=True)
+    if result == "superseded":
+        return  # the newer push carries these settings too
+    with _pending_config_lock:
+        _pending_config.get((room, group), set()).difference_update(snapshot or ())
+    for setting in snapshot or ():
+        _publish_status(room, setting, "ok" if result == "ok" else "failed")
     if result == "ok":
-        log.info("Config applied to %s: %s = %s", room, setting, cfg[setting])
+        log.info("Config applied to %s: %s", room, ", ".join(sorted(snapshot or ())))
     else:
-        log.warning("Config push to %s (%s) failed: %s", room, setting, result)
+        log.warning("Config push to %s (%s) failed after %d retries", room, group, len(RETRY_DELAYS))
 
 
 def publish_config_state(room: str) -> None:
@@ -896,12 +992,11 @@ def time_broadcast_loop() -> None:
             for room in ADDR_BY_ROOM:
                 frame = build_frame(MSG_TIME_INFORMATION, BASE_ADDR, ADDR_BY_ROOM[room],
                                     encode_time_information(), flags=0x04)
-                if not cul_send(frame):
+                if not _paced_send(frame):
                     log.warning("TimeInformation broadcast aborted at %s (CUL unavailable)", room)
                     break
                 log.info("TimeInformation broadcast → %s (%s %s)", room,
                          time.strftime("%Y-%m-%d %H:%M:%S"), time.strftime("%Z %z"))
-                time.sleep(TX_SETTLE)  # also keeps back-to-back Zs from resetting the stick
         time.sleep(interval)
 
 
