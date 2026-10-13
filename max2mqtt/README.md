@@ -37,6 +37,7 @@ as a local add-on (or FHEM), stop and remove it first so the CUL port is free.
 | `profiles_file` | `/config/heating_week_profile.yaml` | Path to the weekly-profile file. Provided via `map: config:ro` from your Home Assistant `/config`. |
 | `cul_address` | `"abcdef"` | CUL base address the thermostats are paired with (lowercase hex). |
 | `devices` | _(example pairs)_ | List of `room` / `address` pairs mapping each thermostat's RF address to a room key. Set these to your own thermostats. |
+| `timezone` | `""` | IANA timezone for the thermostat clocks (e.g. `Europe/Berlin`). Empty = take it from the Supervisor. |
 | `weekprofile_frame_gap` | `3.5` | Seconds between week-profile frames (duty cycle). |
 | `lovf_recovery_gap` | `10.0` | Seconds to wait after a `LOVF` (duty-cycle limit) before resending. |
 

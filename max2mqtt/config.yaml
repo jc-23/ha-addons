@@ -33,6 +33,7 @@ options:
   weekprofile_frame_gap: 3.5
   lovf_recovery_gap: 10.0
   time_sync_interval_hours: 24
+  timezone: ""
 schema:
   serial_port: str
   serial_baud: int
@@ -49,3 +50,4 @@ schema:
   weekprofile_frame_gap: float
   lovf_recovery_gap: float
   time_sync_interval_hours: int
+  timezone: str?

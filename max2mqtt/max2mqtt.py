@@ -25,33 +25,44 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("max2mqtt")
 
 
-def _apply_timezone() -> None:
+def _apply_timezone(configured: str = "") -> None:
     """
     Make sure local time is the Home Assistant timezone. The thermostat clocks are
     set from time.localtime(), so a container left on UTC puts the week profile
-    switch points 1-2 h off. Prefer TZ from the environment; if it is missing or
-    resolves to UTC, ask the Supervisor (its /supervisor/info carries "timezone").
+    switch points 1-2 h off. Order: `timezone` option, TZ from the environment
+    (unless UTC), then the Supervisor (/supervisor/info carries "timezone").
     """
-    if os.environ.get("TZ") and time.strftime("%z") != "+0000":
+    tz = configured.strip()
+    source = "option"
+    if not tz and os.environ.get("TZ") and time.strftime("%z") != "+0000":
         return
-    token = os.environ.get("SUPERVISOR_TOKEN")
-    if not token:
-        return
-    try:
-        import urllib.request
-        req = urllib.request.Request("http://supervisor/supervisor/info",
-                                     headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            tz = json.load(r).get("data", {}).get("timezone")
-        if tz:
-            os.environ["TZ"] = tz
-            time.tzset()
-            log.info("Timezone taken from Supervisor: %s", tz)
-    except Exception as e:  # keep running on whatever the container has
-        log.warning("Could not query timezone from Supervisor: %s", e)
-
-
-_apply_timezone()
+    if not tz:
+        source = "Supervisor"
+        token = os.environ.get("SUPERVISOR_TOKEN")
+        if not token:
+            try:  # s6 images keep the container env here when init is bypassed
+                with open("/run/s6/container_environment/SUPERVISOR_TOKEN") as f:
+                    token = f.read().strip()
+            except OSError:
+                pass
+        if not token:
+            log.warning("No timezone: TZ unset and no SUPERVISOR_TOKEN; set the "
+                        "`timezone` add-on option (e.g. Europe/Berlin)")
+            return
+        try:
+            import urllib.request
+            req = urllib.request.Request("http://supervisor/supervisor/info",
+                                         headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                tz = json.load(r).get("data", {}).get("timezone") or ""
+        except Exception as e:
+            log.warning("Could not query timezone from Supervisor: %s; set the "
+                        "`timezone` add-on option", e)
+            return
+    if tz:
+        os.environ["TZ"] = tz
+        time.tzset()
+        log.info("Timezone set to %s (from %s)", tz, source)
 
 # ---------------------------------------------------------------------------
 # Configuration from /data/options.json (written by HAOS supervisor)
@@ -65,6 +76,7 @@ def _load_options() -> dict:
         return {}
 
 _opts = _load_options()
+_apply_timezone(str(_opts.get("timezone", "") or ""))
 
 SERIAL_PORT   = _opts.get("serial_port",   "/dev/ttyACM0")
 SERIAL_BAUD   = int(_opts.get("serial_baud",   38400))

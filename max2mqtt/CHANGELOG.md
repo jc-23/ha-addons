@@ -8,9 +8,10 @@
   thermostat resumes its week profile. The target is no longer published
   optimistically in that case; the thermostat's own report updates it.
 - Fixed: thermostat clocks (and with them the week profile switch points) ran in
-  UTC. The add-on now asks the Supervisor for the Home Assistant timezone when
-  `TZ` is missing or resolves to UTC, and logs the effective timezone at startup
-  and with every time broadcast.
+  UTC because the container gets no `TZ`. The add-on now asks the Supervisor for
+  the Home Assistant timezone when `TZ` is missing or UTC, and has a new
+  `timezone` option (e.g. `Europe/Berlin`) as an explicit override. The effective
+  timezone is logged at startup and with every time broadcast.
 
 ## 1.0.3
 
