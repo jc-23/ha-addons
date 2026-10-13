@@ -24,6 +24,35 @@ except AttributeError:  # non-Unix; not reached in the container
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("max2mqtt")
 
+
+def _apply_timezone() -> None:
+    """
+    Make sure local time is the Home Assistant timezone. The thermostat clocks are
+    set from time.localtime(), so a container left on UTC puts the week profile
+    switch points 1-2 h off. Prefer TZ from the environment; if it is missing or
+    resolves to UTC, ask the Supervisor (its /supervisor/info carries "timezone").
+    """
+    if os.environ.get("TZ") and time.strftime("%z") != "+0000":
+        return
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://supervisor/supervisor/info",
+                                     headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            tz = json.load(r).get("data", {}).get("timezone")
+        if tz:
+            os.environ["TZ"] = tz
+            time.tzset()
+            log.info("Timezone taken from Supervisor: %s", tz)
+    except Exception as e:  # keep running on whatever the container has
+        log.warning("Could not query timezone from Supervisor: %s", e)
+
+
+_apply_timezone()
+
 # ---------------------------------------------------------------------------
 # Configuration from /data/options.json (written by HAOS supervisor)
 # ---------------------------------------------------------------------------
@@ -494,7 +523,7 @@ def on_message(client, userdata, msg):
 def _handle_set_temperature(room: str, payload: str) -> None:
     """
     Payload from HA can be:
-      - "auto"           → mode=auto, keeps the current setpoint
+      - "auto"           → mode=auto, temp byte 0 (resume week profile, no override)
       - "off"  / "eco"   → mode=manual, temp=17.0 (off equivalent)
       - "heat" / "boost" → mode=boost, keeps the current setpoint
       - "auto <temp>"    → mode=auto, explicit temp
@@ -508,14 +537,15 @@ def _handle_set_temperature(room: str, payload: str) -> None:
     mode     = 1   # manual
     temp     = 17.0
 
+    resume_profile = False
     if payload == "auto":
-        # A SetTemperature frame always carries a temp byte, even in auto mode — and
-        # the thermostat holds that value until its *next week-profile switch point*
-        # (same "temporary override" behaviour as turning the physical dial). Sending
-        # a fixed 17.0 here used to drop the room to the Eco/off temperature for
-        # potentially hours; re-send the last known real setpoint instead so a plain
-        # "auto" (e.g. after clearing a manual/boost override) doesn't move the target.
-        mode = 0; temp = _last_desired.get(room, 21.0)
+        # Auto with temperature byte 0 means "no override": the thermostat returns
+        # to its week profile (FHEM: `desiredTemperature auto`). Any non-zero value
+        # is held as a temporary override until the next profile switch point — a
+        # fixed 17.0 dropped rooms to Eco, re-sending the last setpoint (1.0.2)
+        # pinned them at the old manual value for hours.
+        mode = 0; temp = 0.0
+        resume_profile = True
     elif payload in ("off", "eco"):
         mode = 1; temp = 17.0
     elif payload in ("heat", "boost"):
@@ -540,7 +570,8 @@ def _handle_set_temperature(room: str, payload: str) -> None:
     enc     = encode_set_temperature(temp, mode)
     frame   = build_frame(MSG_SET_TEMPERATURE, BASE_ADDR, ADDR_BY_ROOM[room], enc)
     cul_send(frame)
-    log.info("SetTemperature → %s: mode=%d temp=%.1f", room, mode, temp)
+    log.info("SetTemperature → %s: mode=%d temp=%.1f%s", room, mode, temp,
+             " (resume week profile)" if resume_profile else "")
 
     # Seed the boost-preservation cache from explicit setpoints (not from boost
     # itself, nor from the 17.0 off/auto placeholders).
@@ -551,7 +582,8 @@ def _handle_set_temperature(room: str, payload: str) -> None:
     # state echo can take a minute or more to arrive over RF.
     hvac_mode  = "heat" if mode == 3 else ("off" if (mode == 1 and temp <= 17.0) else "auto")
     prefix     = f"{BASE_TOPIC}/climate/{room}"
-    mqtt_publish(f"{prefix}/target_temperature", str(temp), retain=True)
+    if not resume_profile:  # the profile's setpoint is unknown until the thermostat reports
+        mqtt_publish(f"{prefix}/target_temperature", str(temp), retain=True)
     mqtt_publish(f"{prefix}/mode", hvac_mode, retain=True)
 
 
@@ -855,7 +887,8 @@ def time_broadcast_loop() -> None:
                 if not cul_send(frame):
                     log.warning("TimeInformation broadcast aborted at %s (CUL unavailable)", room)
                     break
-                log.info("TimeInformation broadcast → %s", room)
+                log.info("TimeInformation broadcast → %s (%s %s)", room,
+                         time.strftime("%Y-%m-%d %H:%M:%S"), time.strftime("%Z %z"))
                 time.sleep(TX_SETTLE)  # also keeps back-to-back Zs from resetting the stick
         time.sleep(interval)
 
@@ -868,6 +901,8 @@ def main():
     global _mqtt_client
 
     _load_config()
+    log.info("Timezone: TZ=%r, local time %s %s (thermostat clocks are set from this)",
+             os.environ.get("TZ"), time.strftime("%Y-%m-%d %H:%M:%S"), time.strftime("%Z %z"))
 
     _mqtt_client = mqtt.Client()
     if MQTT_USER:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.4
+
+- Fixed: switching back to `auto` (mode or `target_temperature/set = auto`) re-sent
+  the last known setpoint, which the thermostat held as a temporary override until
+  the next profile switch point. The frame now carries temperature byte 0, so the
+  thermostat resumes its week profile. The target is no longer published
+  optimistically in that case; the thermostat's own report updates it.
+- Fixed: thermostat clocks (and with them the week profile switch points) ran in
+  UTC. The add-on now asks the Supervisor for the Home Assistant timezone when
+  `TZ` is missing or resolves to UTC, and logs the effective timezone at startup
+  and with every time broadcast.
+
 ## 1.0.3
 
 - Fixed: the MapleCUL stick dropped off the USB bus (and the config/time frame was
