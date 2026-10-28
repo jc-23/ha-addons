@@ -933,6 +933,18 @@ def parse_cul_line(line: str) -> None:
     if msg_type == MSG_ACK and dst_addr == BASE_ADDR and src_addr in _ack_events:
         _ack_events[src_addr].set()
 
+    # A thermostat Ack carries status (0x01 ok, bit 0x80 = NAK) followed by the
+    # ThermostatState bytes without the measured temperature (FHEM 10_MAX.pm). Use it
+    # to refresh valve/mode/setpoint, since state broadcasts can be hours apart.
+    if msg_type == MSG_ACK:
+        room = DEVICES.get(src_addr)
+        if room and len(payload_hex) >= 8 and not int(payload_hex[:2], 16) & 0x80:
+            state = parse_thermostat_state(payload_hex[2:])
+            if state:
+                publish_thermostat_state(room, state)
+                log.info("State from %s (ack): %s", room, state)
+        return
+
     # A thermostat asking us for the time — answer so its clock (and therefore the
     # week program switch points) stays accurate. Skip if a send is in progress.
     if msg_type == MSG_TIME_INFORMATION and dst_addr == BASE_ADDR:

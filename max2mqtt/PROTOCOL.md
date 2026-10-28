@@ -62,7 +62,9 @@ steps). A frame is `len cnt flags type src(3) dst(3) group payload`.
 - **TimeInformation (`0x03`)** — answers thermostat time requests and broadcasts the
   time every `time_sync_interval_hours` (default 24).
 - **ThermostatState (`0x60`)** — parses mode, valve %, desired/actual temp, battery-low.
-- **Ack (`0x02`)** — delivery confirmation, with duty-cycle aware resend.
+- **Ack (`0x02`)** — delivery confirmation, with duty-cycle aware resend. Payload is
+  status (`01` ok, bit `0x80` = NAK) plus the ThermostatState bytes without the
+  measured temperature; used to refresh valve/mode/setpoint.
 
 ### Config frame encodings (implemented)
 

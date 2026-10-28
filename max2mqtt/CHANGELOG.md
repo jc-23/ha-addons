@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.8
+
+- Thermostat Acks now update valve, mode and setpoint (the Ack carries the state
+  bytes without the measured temperature). Previously the valve only refreshed on
+  the thermostat's own state broadcasts, which can be hours apart, so it could
+  show a stale value long after the last command.
+
 ## 1.0.7
 
 - Setpoint, mode and boost commands now go through the same serialised, paced and
